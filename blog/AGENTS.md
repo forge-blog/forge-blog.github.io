@@ -2,7 +2,9 @@
 
 Use this guide when creating artwork for a FORGE Lab blog post. Match the
 homepage's Korean-inspired ink painting, not a generic cybersecurity illustration.
-Keep changes scoped to the requested post and its assets.
+Keep changes scoped to the requested post and its assets. For technical figures
+inside an article, follow [Infographics and diagrams](#infographics-and-diagrams)
+instead of the cover guidance.
 
 ## Visual reference
 
@@ -176,3 +178,38 @@ Follow [`README.md`](./README.md) for Hugo setup. From the `blog/` directory,
 build with `hugo`. Preview with `hugo server -D` (`-D` includes drafts) if a
 preview server is not already running. Inspect the actual post, not just
 the source image. Do not commit generated `public/` or `resources/` output.
+
+## Infographics and diagrams
+
+Article figures explain one technical idea precisely. They are clean editorial
+diagrams, not paintings: none of the cover's ink-wash treatment applies.
+
+- **Format.** Hand-author SVG in the post bundle, such as
+  `content/posts/<slug>/diagram.svg`, and embed it with
+  `![alt text](diagram.svg)`. SVG stays sharp, small, and reviewable in
+  diffs. Use raster images only for screenshots.
+- **Canvas.** Use a `viewBox` about 600 units wide for the 680-pixel column and
+  prefer vertical flows that survive narrow screens. Keep titles around 19 units
+  and other text at least 16. Leave the background transparent so the page
+  paper shows through.
+- **Palette.** Ink `#292b28` for lines and primary text, muted `#65665e` for
+  secondary labels, light fills such as `#fbfaf7`, and accent `#98482e` only for
+  what goes wrong: the failing step, the attacker's path, the bug itself. Accent
+  tints at low opacity can mark a region. Avoid other hues.
+- **Type.** Use the site's sans stack
+  (`-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`) for labels and a
+  monospace stack for code identifiers. Use sentence case and short phrases;
+  explanations belong in the article text.
+- **Shapes.** Flat boxes with 1.5-unit strokes and about 6-unit corner radius.
+  Solid ink arrows mark normal flow; dashed accent arrows mark exceptional or
+  hidden paths. Draw arrowheads as plain paths rather than markers so every
+  renderer orients them correctly. No gradients, shadows, 3D, icons, or clip
+  art.
+- **Consistency.** Label steps with the same names and identifiers the article
+  and its code use. Show one idea per figure.
+- **Accessibility.** Include `<title>` and `<desc>` in the SVG, write alt text
+  that states the figure's point, and never rely on color alone; pair the
+  accent with a dashed line or a label.
+
+Render the figure at desktop and roughly 360-pixel mobile widths before
+integrating it, and check that no label overlaps a line or a box edge.
