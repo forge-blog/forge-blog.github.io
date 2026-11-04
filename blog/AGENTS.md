@@ -172,7 +172,7 @@ onto a differently composed painting.
 - If animated, inspect both extremes of movement, the resting state, and
   reduced-motion and failure fallbacks.
 
-From the repository root, build with `hugo --source blog`. Preview with
-`hugo server --source blog --baseURL http://localhost:1313/ --disableFastRender`
-if a preview server is not already running. Inspect the actual post, not just
+Follow [`README.md`](./README.md) for Hugo setup. From the `blog/` directory,
+build with `hugo`. Preview with `hugo server -D` (`-D` includes drafts) if a
+preview server is not already running. Inspect the actual post, not just
 the source image. Do not commit generated `public/` or `resources/` output.
