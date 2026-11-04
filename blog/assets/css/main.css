@@ -112,6 +112,8 @@ h1 {
     background-clip: text;
     color: transparent;
   }
+  /* Selection paints over the clipped gradient, so give selected text a fill. */
+  .forged-accent::selection { color: var(--accent); }
 }
 @media (forced-colors: active) {
   .forged-accent { background: none; color: CanvasText; }
