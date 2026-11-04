@@ -8,7 +8,12 @@
       <span aria-hidden="true"> / </span>{{ .ReadingTime }} min read
     </p>
   </header>
-  {{ if .Params.toc }}{{ .TableOfContents }}{{ end }}
+  {{ if .Params.toc }}
+  <aside class="toc" aria-labelledby="toc-title">
+    <p class="toc-title" id="toc-title">Contents</p>
+    {{ .TableOfContents }}
+  </aside>
+  {{ end }}
   <div class="prose">{{ .Content }}</div>
 </article>
 {{ end }}
