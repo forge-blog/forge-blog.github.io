@@ -92,7 +92,7 @@ hiding them with effects.
    highlights. Preserve alpha transparency and decontaminate warm edge colors
    so the artwork has no pale halo on `#f7f5ef`.
 3. Export an optimized transparent WebP. A width around 1400-1600 pixels is
-   normally sufficient for the current 680-pixel article column at high DPI.
+   normally sufficient for the current 760-pixel article column at high DPI.
    Aim for a few hundred KB when possible without damaging the painting.
 4. Inspect the exported image on the actual page background, not only against
    white in an image viewer. Check desktop, narrow mobile, and high-DPI views.
@@ -188,7 +188,7 @@ diagrams, not paintings: none of the cover's ink-wash treatment applies.
   `content/posts/<slug>/diagram.svg`, and embed it with
   `![alt text](diagram.svg)`. SVG stays sharp, small, and reviewable in
   diffs. Use raster images only for screenshots.
-- **Canvas.** Use a `viewBox` about 600 units wide for the 680-pixel column and
+- **Canvas.** Use a `viewBox` about 600 units wide for the 760-pixel column and
   prefer vertical flows that survive narrow screens. Keep titles around 19 units
   and other text at least 16. Leave the background transparent so the page
   paper shows through.
