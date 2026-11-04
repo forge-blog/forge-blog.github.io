@@ -196,9 +196,11 @@ diagrams, not paintings: none of the cover's ink-wash treatment applies.
   secondary labels, light fills such as `#fbfaf7`, and accent `#98482e` only for
   what goes wrong: the failing step, the attacker's path, the bug itself. Accent
   tints at low opacity can mark a region. Avoid other hues.
-- **Type.** Use the site's sans stack
+- **Type.** Use a system sans stack
   (`-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`) for labels and a
-  monospace stack for code identifiers. Use sentence case and short phrases;
+  system monospace stack for code identifiers. An SVG embedded with `<img>`
+  cannot load the site's web fonts, so do not rely on Literata, Inter, or
+  JetBrains Mono inside figures. Use sentence case and short phrases;
   explanations belong in the article text.
 - **Shapes.** Flat boxes with 1.5-unit strokes and about 6-unit corner radius.
   Solid ink arrows mark normal flow; dashed accent arrows mark exceptional or

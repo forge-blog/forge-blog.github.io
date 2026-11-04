@@ -9,6 +9,7 @@
     {{ with site.Home.OutputFormats.Get "RSS" }}
     <link rel="alternate" type="application/rss+xml" title="{{ site.Title }}" href="{{ .Permalink }}">
     {{ end }}
+    <link rel="preload" href="{{ "fonts/literata-latin-opsz-normal.woff2" | relURL }}" as="font" type="font/woff2" crossorigin>
     {{ $style := resources.Get "css/main.css" | minify | fingerprint }}
     <link rel="stylesheet" href="{{ $style.RelPermalink }}" integrity="{{ $style.Data.Integrity }}">
   </head>
