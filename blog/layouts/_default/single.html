@@ -8,6 +8,7 @@
       <span aria-hidden="true"> / </span>{{ .ReadingTime }} min read
     </p>
   </header>
+  {{ if .Params.toc }}{{ .TableOfContents }}{{ end }}
   <div class="prose">{{ .Content }}</div>
 </article>
 {{ end }}
