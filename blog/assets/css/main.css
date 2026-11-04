@@ -7,6 +7,7 @@
   --rule: #dcd9ce;
   --serif: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
   --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
 }
 
 * { box-sizing: border-box; }
@@ -207,8 +208,9 @@ h1 {
 .prose h3 { margin-top: 1.6em; font-size: 24px; }
 .prose a { color: var(--accent); }
 .prose img { max-width: 100%; height: auto; }
-.prose pre { padding: 20px; overflow-x: auto; background: #eeece4; font-size: 14px; }
-.prose code { font-size: 0.85em; }
+.prose pre { padding: 20px; overflow-x: auto; background: #eeece4; font-size: 0.8em; line-height: 1.55; }
+.prose code { font-family: var(--mono); font-size: 0.875em; font-variant-ligatures: none; }
+.prose pre code { font-size: inherit; }
 .prose blockquote { margin: 24px 0; padding-left: 24px; border-left: 2px solid var(--accent); color: var(--muted); }
 .prose table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; }
 .prose th, .prose td { padding: 8px 16px; border-bottom: 1px solid var(--rule); text-align: left; }
