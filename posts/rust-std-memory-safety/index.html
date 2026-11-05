@@ -1,0 +1,362 @@
+<!doctype html><html lang=en-us><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Memory Safety Bugs in Rust’s std · FORGE Lab</title><meta name=description content="Knowing What You Trust: Three patterns behind memory safety bugs we found in Rust's standard library, and why Rust's safety model still matters even though it isn't perfect."><link rel=canonical href=https://forge-blog.github.io/posts/rust-std-memory-safety/><link rel=alternate type=application/rss+xml title="FORGE Lab" href=https://forge-blog.github.io/index.xml><link rel=preload href=/fonts/literata-latin-opsz-normal.woff2 as=font type=font/woff2 crossorigin><link rel=stylesheet href=/css/main.min.133855bdc9a995652f1a53cb645a8c8bb16f726063dc8134429685e6f828b4ff.css integrity="sha256-EzhVvcmplWUvGlPLZFqMi7FvcmBj3IE0QpaF5vgotP8="><link rel=stylesheet href=/css/rust-inspection.min.adb5d760e12cdd59f2329bf3edd6e2fb715b61ce7a8b6d28c3daee7c55d900ba.css integrity="sha256-rbXXYOEs3VnyMpvz7dbi+3FbYc56i20ow9rufFXZALo="></head><body><a class=skip-link href=#main>Skip to content</a><div class=site><header class=site-header><a class=wordmark href=/ aria-label="FORGE Lab home">FORGE<span> Lab</span></a><nav aria-label="Main navigation"><a href=/posts/ aria-current=page>Writing</a>
+<a href=https://github.com/microsoft/forge-lab/blob/main/cve/cve.json aria-label="View CVE data on GitHub">CVE</a>
+<a href=https://github.com/microsoft/forge-lab>GitHub <span aria-hidden=true>↗</span></a></nav></header><main id=main><article class=post><header class="page-heading page-heading-with-artwork"><a class=back-link href=/posts/>← All writing</a><h1>Memory Safety Bugs in Rust’s <code>std</code></h1><p class=post-meta>By <a href=https://github.com/qwaz>Yechan Bae</a>
+<span aria-hidden=true>/ </span><time datetime=2026-11-05>November 5, 2026</time>
+<span aria-hidden=true>/ </span>18 min read</p><figure class="post-artwork rust-inspection" data-rust-inspection><img class=rust-inspection-still src=/posts/rust-std-memory-safety/cover.webp width=1536 height=1024 alt="An artisan inspecting a hairline crack in a forged iron ring with a fine metal pick."><div class=rust-inspection-layers aria-hidden=true><img class=rust-inspection-base src=/posts/rust-std-memory-safety/cover-base.webp width=1536 height=1024 alt draggable=false>
+<svg class="rust-inspection-crack" viewBox="0 0 1536 1024" width="1536" height="1024" aria-hidden="true" focusable="false"><path data-crack-path="" d="M803 553l4-6 8-8 8-9 5-2 7-8 1-5 4-1 5-7 5-6 3-6 4-2 3-5 4-6 6-4 5-4 4-4 4-4" fill="none"/></svg>
+<img class=rust-inspection-head src=/posts/rust-std-memory-safety/cover-head.webp width=1536 height=1024 alt draggable=false>
+<img class=rust-inspection-hand src=/posts/rust-std-memory-safety/cover-hand.webp width=1536 height=1024 alt draggable=false></div></figure><script src=/js/rust-inspection.min.f233415787c7fe3333b2afbebd699f601335086c02930cf12ff7a0048508743e.js integrity="sha256-8jNBV4fH/jMzsq++vWmfYBM1CGwCkwzxL/egBIUIdD4=" defer></script></header><aside class=toc aria-labelledby=toc-title><p class=toc-title id=toc-title>Contents</p><nav id=TableOfContents><ul><li><a href=#patterns-of-rusts-safety-bugs>Patterns of Rust&rsquo;s Safety Bugs</a><ul><li><a href=#pattern-1-trusting-code-not-to-panic>Pattern 1: Trusting code not to panic</a></li><li><a href=#pattern-2-trusting-user-provided-implementations-to-be-correct>Pattern 2: Trusting user-provided implementations to be correct</a></li><li><a href=#pattern-3-trusting-the-underlying-system>Pattern 3: Trusting the underlying system</a></li><li><a href=#limitations-before-we-continue>Limitations, before we continue</a></li></ul></li><li><a href=#why-rust-still-matters>Why Rust still matters</a></li><li><a href=#takeaways>Takeaways</a></li></ul></nav></aside><div class=prose><p>Rust&rsquo;s adoption has accelerated in the agentic era, and two forces are pushing
+in the same direction.</p><p><strong>Memory-safety bugs now become exploits in hours.</strong> AI has collapsed the time
+between finding a bug and exploiting it.
+<a href=https://www.microsoft.com/en-us/security/security-insider/threat-landscape/2026-digital-defense-report>The median time from a vulnerability&rsquo;s discovery in the wild to its weaponization is now well below 24 hours</a>,
+while enterprises can take 30 to 60 days to fix critical exposed systems. When
+a memory-safety bug can be weaponized that quickly, preventing it in the first
+place matters more than ever.</p><p><strong>Rust&rsquo;s compiler gives agents, and people, the confidence to change code.</strong>
+Rust&rsquo;s rich type system and ownership model encourage good designs while ruling
+out whole classes of safety issues, so large refactors become routine rather
+than risky. Rust developers like to say that if it compiles, it works: change a
+type, follow the compiler errors, and the program usually works again once
+they&rsquo;re gone. Agents benefit from the same loop.</p><p>Microsoft made Rust a
+<a href=https://rustfoundation.org/media/guest-post-rust-is-tier-1-language-at-microsoft/>Tier-1 internal language</a>
+alongside C++, C#, and TypeScript, and GitHub
+<a href=https://github.blog/ai-and-ml/generative-ai/migrating-the-github-copilot-runtime-to-rust-using-copilot/>rewrote the Copilot agent runtime in Rust</a>.
+Other projects moving to Rust include
+<a href=https://bun.com/blog/bun-in-rust>Bun</a>,
+<a href=https://blog.google/security/rust-in-android-move-fast-fix-things/>Android</a>,
+the <a href=https://lwn.net/Articles/1050174/>Linux kernel</a>, and
+<a href=https://blog.cloudflare.com/20-percent-internet-upgrade/>Cloudflare</a>.</p><p>With so much critical code moving to Rust, we wanted a closer look at the code
+everything else builds on: the standard library. This year, FORGE Lab spent some
+time exploring it and came across a few interesting memory-safety bugs. Rust&rsquo;s
+popularity wasn&rsquo;t the only reason we looked. We write many of our internal tools
+in Rust and genuinely enjoy using it, and our team includes the authors of
+<a href=https://dl.acm.org/doi/10.1145/3477132.3483570>Rudra</a>, a static analyzer that
+found memory-safety bugs across the Rust ecosystem in 2021 and led to 76 CVEs.</p><p>In this post, we share some of the bugs we reported to the Rust issue tracker.
+We use them to discuss what Rust does and doesn&rsquo;t guarantee, why writing correct
+unsafe Rust is so difficult, and why Rust&rsquo;s safety model still matters even
+though its memory safety isn&rsquo;t perfect.</p><h2 id=patterns-of-rusts-safety-bugs>Patterns of Rust&rsquo;s Safety Bugs</h2><p>At the lowest level, Rust uses
+<a href=https://doc.rust-lang.org/book/ch20-01-unsafe-rust.html><code>unsafe</code> blocks</a> to
+work with raw pointers and interact directly with the operating system.
+Much of the standard library, including <code>Vec</code> and <code>String</code>,
+is built from small unsafe pieces wrapped in safe APIs.
+Inside an <code>unsafe</code> block, the programmer takes responsibility for the guarantees
+the compiler can&rsquo;t check, and that responsibility extends to the safe API built
+around it. That API must be
+<a href=https://doc.rust-lang.org/nomicon/safe-unsafe-meaning.html>sound</a>: no matter
+how safe code uses it, it must be impossible to trigger undefined behavior.</p><p>Upholding that promise is harder than it looks. Consider a function that returns
+the byte at <code>idx</code> from any type that can be viewed as a byte slice, skipping the
+redundant bounds check after doing its own:</p><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><code class=language-rust data-lang=rust><span style=display:flex><span><span style=color:#66d9ef>pub</span> <span style=color:#66d9ef>fn</span> <span style=color:#a6e22e>get</span><span style=color:#f92672>&lt;</span>S: AsRef<span style=color:#f92672>&lt;</span>[<span style=color:#66d9ef>u8</span>]<span style=color:#f92672>&gt;&gt;</span>(s: <span style=color:#66d9ef>&amp;</span><span style=color:#a6e22e>S</span>, idx: <span style=color:#66d9ef>usize</span>) -&gt; Option<span style=color:#f92672>&lt;</span><span style=color:#66d9ef>u8</span><span style=color:#f92672>&gt;</span> {
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>if</span> idx <span style=color:#f92672>&lt;</span> s.as_ref().len() {
+</span></span><span style=display:flex><span>        <span style=color:#75715e>// SAFETY: we just checked that `idx` is in bounds.
+</span></span></span><span style=display:flex><span>        Some(<span style=color:#66d9ef>unsafe</span> { <span style=color:#f92672>*</span>s.as_ref().get_unchecked(idx) })
+</span></span><span style=display:flex><span>    } <span style=color:#66d9ef>else</span> {
+</span></span><span style=display:flex><span>        None
+</span></span><span style=display:flex><span>    }
+</span></span><span style=display:flex><span>}
+</span></span></code></pre></div><p>The hard part of unsafe Rust is knowing what you can trust. The function above
+looks correct, but it assumes that two calls to <code>as_ref</code> return the same slice.
+Because <code>S</code> is chosen by the caller, a safe <code>AsRef</code>
+implementation can return a long slice the first time and an empty one the
+second, and <code>get</code> reads out of bounds. Unsafe code must be careful with every
+call it makes, and the bugs we found fall into three patterns of misplaced
+trust: trusting code not to panic, trusting user-provided implementations to be
+correct, and trusting the underlying system.</p><h3 id=pattern-1-trusting-code-not-to-panic>Pattern 1: Trusting code not to panic</h3><p>Unsafe code often breaks an invariant for a moment and restores it afterward;
+for example, it may allocate an uninitialized buffer and fill it directly,
+avoiding redundant writes to zero the memory first. That&rsquo;s fine as long as the
+function runs to the end. But many operations in Rust can panic,
+from out-of-bounds indexing to calls into user-provided code, and by default a
+panic unwinds: it leaves the function early while still running destructors.
+Unwinding inside that window becomes an invisible exit that exposes the broken
+invariant to code that trusts it. Bugs of this kind are called panic safety
+bugs.</p><p><img src=panic-safety.svg alt="Flow diagram: a function breaks an invariant, calls code that may panic, and restores the invariant before returning. If the call panics, unwinding skips the restore step and runs a destructor on the broken state, causing undefined behavior."></p><h4 id=mapwindowsclone><code>MapWindows::clone</code></h4><p>Let&rsquo;s look at one of our bug reports,
+<a href=https://github.com/rust-lang/rust/issues/156501>a panic safety issue in <code>MapWindows::clone</code></a>.
+<a href=https://doc.rust-lang.org/nightly/std/iter/trait.Iterator.html#method.map_windows><code>Iterator::map_windows</code></a>,
+a nightly API, yields overlapping windows of <code>N</code> items. It keeps the current
+window in a <code>Buffer</code> whose destructor drops the <code>N</code> items starting at <code>start</code>.
+In Rust 1.97.0,
+<a href=https://github.com/rust-lang/rust/blob/1.97.0/library/core/src/iter/adapters/map_windows.rs#L37-L43><code>library/core/src/iter/adapters/map_windows.rs</code></a>
+defines it as:</p><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><code class=language-rust data-lang=rust><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">37</span><span><span style=color:#66d9ef>struct</span> <span style=color:#a6e22e>Buffer</span><span style=color:#f92672>&lt;</span>T, <span style=color:#66d9ef>const</span> N: <span style=color:#66d9ef>usize</span><span style=color:#f92672>&gt;</span> {
+</span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">38</span><span>    <span style=color:#75715e>// Invariant: `self.buffer[self.start..self.start + N]` is initialized,
+</span></span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">39</span><span>    <span style=color:#75715e>// with all other elements being uninitialized. This also
+</span></span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">40</span><span>    <span style=color:#75715e>// implies that `self.start &lt;= N`.
+</span></span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">41</span><span>    buffer: [[MaybeUninit<span style=color:#f92672>&lt;</span>T<span style=color:#f92672>&gt;</span>; N]; <span style=color:#ae81ff>2</span>],
+</span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">42</span><span>    start: <span style=color:#66d9ef>usize</span>,
+</span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">43</span><span>}
+</span></span></code></pre></div><p><a href=https://github.com/rust-lang/rust/blob/1.97.0/library/core/src/iter/adapters/map_windows.rs#L195-L203><code>Buffer::clone</code></a>,
+in the same file, built the new buffer first and filled it afterward:</p><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><code class=language-rust data-lang=rust><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">195</span><span><span style=color:#66d9ef>impl</span><span style=color:#f92672>&lt;</span>T: Clone, <span style=color:#66d9ef>const</span> N: <span style=color:#66d9ef>usize</span><span style=color:#f92672>&gt;</span> Clone <span style=color:#66d9ef>for</span> Buffer<span style=color:#f92672>&lt;</span>T, N<span style=color:#f92672>&gt;</span> {
+</span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">196</span><span>    <span style=color:#66d9ef>fn</span> <span style=color:#a6e22e>clone</span>(<span style=color:#f92672>&amp;</span>self) -&gt; <span style=color:#a6e22e>Self</span> {
+</span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">197</span><span>        <span style=color:#66d9ef>let</span> <span style=color:#66d9ef>mut</span> buffer <span style=color:#f92672>=</span> Buffer {
+</span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">198</span><span>            buffer: [[<span style=color:#66d9ef>const</span> { MaybeUninit::uninit() }; N], [<span style=color:#66d9ef>const</span> { MaybeUninit::uninit() }; N]],
+</span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">199</span><span>            start: <span style=color:#a6e22e>self</span>.start,
+</span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">200</span><span>        };
+</span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">201</span><span>        buffer.as_uninit_array_mut().write(self.as_array_ref().clone());
+</span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">202</span><span>        buffer
+</span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">203</span><span>    }
+</span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">204</span><span>}
+</span></span></code></pre></div><p>After line 197, <code>buffer</code> breaks its own invariant: its slots are uninitialized,
+but its destructor is already armed. The <code>clone()</code> call on line 201 runs the
+user&rsquo;s <code>T::clone</code> before the slots are written. If that call panics, unwinding
+drops <code>buffer</code> and runs <code>drop_in_place</code> on <code>N</code> uninitialized values. Our proof of
+concept uses only safe code: an element type whose <code>clone</code> always panics, which
+crashes when the destructor reads the garbage. The
+<a href=https://github.com/rust-lang/rust/commit/4a647a5084fa9100cb506185fa9ee9ed454374ab>fix</a>
+holds the new buffer in <code>ManuallyDrop</code> until it is fully written, so unwinding
+leaks the half-built buffer instead of dropping it.</p><p>The general lesson is to treat every call to code you don&rsquo;t control, such as
+<code>clone</code>, <code>drop</code>, comparisons, closures, and iterator methods, as a possible early
+exit. Either finish the work that may panic before breaking an invariant, or
+make the broken state safe to unwind through: hold it in <code>ManuallyDrop</code>, or use
+a guard whose destructor restores the invariant, like <code>Vec</code>&rsquo;s internal
+<code>SetLenOnDrop</code>. The Rustonomicon covers this under
+<a href=https://doc.rust-lang.org/nomicon/exception-safety.html>exception safety</a>.</p><h4 id=allocators-must-not-unwind>Allocators must not unwind</h4><p>The recently stabilized allocator API is further evidence of how hard panic
+safety is to get right. With <code>std</code>, the default response to an allocation
+failure is to
+<a href=https://doc.rust-lang.org/std/alloc/fn.handle_alloc_error.html>abort the process</a>
+rather than unwind, so much of the standard library&rsquo;s unsafe code was written as
+if allocation never unwinds. Custom allocators can break that assumption, and
+while the API was being stabilized, reports kept turning up places that would
+become unsound if an allocator unwound: we reported
+<a href=https://github.com/rust-lang/rust/issues/156490>one in <code>BTreeMap::insert</code></a>,
+and others found more
+(<a href=https://github.com/rust-lang/rust/issues/159334>#159334</a>,
+<a href=https://github.com/rust-lang/rust/issues/159368>#159368</a>,
+<a href=https://github.com/rust-lang/rust/issues/159370>#159370</a>).
+Whether a function can unwind isn&rsquo;t part of its type, so the compiler can&rsquo;t
+point to every place that relies on allocation never unwinding, and fixing them
+one by one would mean auditing everything that allocates. Instead, the
+<a href=https://github.com/rust-lang/rust/pull/156882><code>Allocator</code> stabilization</a>,
+shipping in Rust 1.100 on November 12, requires implementors never to unwind
+from the trait&rsquo;s methods or from <code>drop</code>, noting that &ldquo;unwinding out of many
+allocation-related methods was found to be a pervasive source of unsoundness.&rdquo;</p><h3 id=pattern-2-trusting-user-provided-implementations-to-be-correct>Pattern 2: Trusting user-provided implementations to be correct</h3><p>Unsafe code often calls into code its caller provides: a comparator, a trait
+implementation, a closure. That code is safe, but safe doesn&rsquo;t mean correct, and
+it can return inconsistent or plainly wrong answers. The question is who is
+responsible when it does. In C++, it&rsquo;s the caller. <code>std::sort</code> requires its
+comparator to be a strict weak ordering, and breaking that rule is undefined
+behavior. With libstdc++, sorting equal elements with <code>&lt;=</code> reads past the end of
+the vector:</p><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><code class=language-cpp data-lang=cpp><span style=display:flex><span>std<span style=color:#f92672>::</span>vector<span style=color:#f92672>&lt;</span><span style=color:#66d9ef>int</span><span style=color:#f92672>&gt;</span> v(<span style=color:#ae81ff>100</span>, <span style=color:#ae81ff>42</span>);
+</span></span><span style=display:flex><span><span style=color:#75715e>// Bug: `&lt;=` is not a strict weak ordering, since cmp(a, a) is true.
+</span></span></span><span style=display:flex><span>std<span style=color:#f92672>::</span>sort(v.begin(), v.end(), [](<span style=color:#66d9ef>int</span> a, <span style=color:#66d9ef>int</span> b) { <span style=color:#66d9ef>return</span> a <span style=color:#f92672>&lt;=</span> b; });
+</span></span><span style=display:flex><span><span style=color:#75715e>// AddressSanitizer: heap-buffer-overflow in std::__introsort_loop
+</span></span></span></code></pre></div><p>It&rsquo;s an easy mistake to make, common enough that libc++
+<a href=https://danlark.org/2022/04/20/changing-stdsort-at-googles-scale-and-beyond/>added debug checks for it</a>.
+The same comparator in Rust is a logic error, not a memory safety bug:</p><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><code class=language-rust data-lang=rust><span style=display:flex><span><span style=color:#66d9ef>let</span> <span style=color:#66d9ef>mut</span> v <span style=color:#f92672>=</span> <span style=color:#a6e22e>vec!</span>[<span style=color:#ae81ff>42</span>; <span style=color:#ae81ff>100</span>];
+</span></span><span style=display:flex><span><span style=color:#75715e>// Same bug: this claims `a &lt; b` whenever `a &lt;= b`.
+</span></span></span><span style=display:flex><span>v.sort_by(<span style=color:#f92672>|</span>a, b<span style=color:#f92672>|</span> <span style=color:#66d9ef>if</span> a <span style=color:#f92672>&lt;=</span> b { Ordering::Less } <span style=color:#66d9ef>else</span> { Ordering::Greater });
+</span></span></code></pre></div><p><a href=https://doc.rust-lang.org/std/primitive.slice.html#method.sort_by><code>sort_by</code></a>
+may panic or leave the slice in an unspecified order, but it never causes
+undefined behavior. In Rust, the responsibility sits with the unsafe code: the
+comparator is safe code supplied by the caller, so the unsafe code inside the
+sort must stay sound no matter what it returns. The same goes for every safe
+trait a user can implement: comparisons can be inconsistent, an
+<code>ExactSizeIterator</code> can report a length that doesn&rsquo;t match the items it yields,
+and <code>Borrow</code> can return a different value on each call.</p><h4 id=strreplace-with-a-custom-pattern><code>str::replace</code> with a custom <code>Pattern</code></h4><p>Another of our bug reports shows how easy this trust is to miss:
+<a href=https://github.com/rust-lang/rust/issues/156491><code>str::replace</code> with a custom <code>Pattern</code> can create a non-UTF-8 <code>String</code></a>.
+String search APIs accept any type that implements the nightly <code>Pattern</code> trait,
+and a pattern can describe itself through <code>as_utf8_pattern</code>. <code>str::replace</code> uses
+that description to take a fast path when replacing one ASCII byte with another.
+In Rust 1.96.0, the fast path in
+<a href=https://github.com/rust-lang/rust/blob/1.96.0/library/alloc/src/str.rs#L268-L278><code>library/alloc/src/str.rs</code></a>
+looked like this:</p><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><code class=language-rust data-lang=rust><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">268</span><span><span style=color:#66d9ef>pub</span> <span style=color:#66d9ef>fn</span> <span style=color:#a6e22e>replace</span><span style=color:#f92672>&lt;</span>P: <span style=color:#a6e22e>Pattern</span><span style=color:#f92672>&gt;</span>(<span style=color:#f92672>&amp;</span>self, from: <span style=color:#a6e22e>P</span>, to: <span style=color:#66d9ef>&amp;</span><span style=color:#66d9ef>str</span>) -&gt; String {
+</span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">269</span><span>    <span style=color:#75715e>// Fast path for replacing a single ASCII character with another.
+</span></span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">270</span><span>    <span style=color:#66d9ef>if</span> <span style=color:#66d9ef>let</span> Some(from_byte) <span style=color:#f92672>=</span> <span style=color:#66d9ef>match</span> from.as_utf8_pattern() {
+</span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">271</span><span>        Some(Utf8Pattern::StringPattern([from_byte])) <span style=color:#f92672>=&gt;</span> Some(<span style=color:#f92672>*</span>from_byte),
+</span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">272</span><span>        Some(Utf8Pattern::CharPattern(c)) <span style=color:#f92672>=&gt;</span> c.as_ascii().map(<span style=color:#f92672>|</span>ascii_char<span style=color:#f92672>|</span> ascii_char.to_u8()),
+</span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">273</span><span>        _ <span style=color:#f92672>=&gt;</span> None,
+</span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">274</span><span>    } {
+</span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">275</span><span>        <span style=color:#66d9ef>if</span> <span style=color:#66d9ef>let</span> [to_byte] <span style=color:#f92672>=</span> to.as_bytes() {
+</span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">276</span><span>            <span style=color:#66d9ef>return</span> <span style=color:#66d9ef>unsafe</span> { replace_ascii(self.as_bytes(), from_byte, <span style=color:#f92672>*</span>to_byte) };
+</span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">277</span><span>        }
+</span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">278</span><span>    }
+</span></span></code></pre></div><p><a href=https://github.com/rust-lang/rust/blob/1.96.0/library/alloc/src/str.rs#L708-L712><code>replace_ascii</code></a>,
+in the same file, then rewrites the bytes:</p><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><code class=language-rust data-lang=rust><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">708</span><span><span style=color:#66d9ef>unsafe</span> <span style=color:#66d9ef>fn</span> <span style=color:#a6e22e>replace_ascii</span>(utf8_bytes: <span style=color:#66d9ef>&amp;</span>[<span style=color:#66d9ef>u8</span>], from: <span style=color:#66d9ef>u8</span>, to: <span style=color:#66d9ef>u8</span>) -&gt; String {
+</span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">709</span><span>    <span style=color:#66d9ef>let</span> result: Vec<span style=color:#f92672>&lt;</span><span style=color:#66d9ef>u8</span><span style=color:#f92672>&gt;</span> <span style=color:#f92672>=</span> utf8_bytes.iter().map(<span style=color:#f92672>|</span>b<span style=color:#f92672>|</span> <span style=color:#66d9ef>if</span> <span style=color:#f92672>*</span>b <span style=color:#f92672>==</span> from { to } <span style=color:#66d9ef>else</span> { <span style=color:#f92672>*</span>b }).collect();
+</span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">710</span><span>    <span style=color:#75715e>// SAFETY: We replaced ascii with ascii on valid utf8 strings.
+</span></span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">711</span><span>    <span style=color:#66d9ef>unsafe</span> { String::from_utf8_unchecked(result) }
+</span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">712</span><span>}
+</span></span></code></pre></div><p>The <code>CharPattern</code> branch on line 272 checks that the character is ASCII, but the
+<code>StringPattern</code> branch on line 271 assumes a one-byte string pattern must be
+ASCII. That holds for <code>&amp;str</code> patterns, but <code>StringPattern</code> stored <code>&[u8]</code>, and
+<code>as_utf8_pattern</code> is a safe method any <code>Pattern</code> can implement. In our proof of
+concept, a custom pattern reports the single byte <code>0x80</code>, which only appears
+inside multibyte UTF-8 sequences:</p><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><code class=language-rust data-lang=rust><span style=display:flex><span><span style=color:#66d9ef>impl</span> Pattern <span style=color:#66d9ef>for</span> NonAsciiBytePattern {
+</span></span><span style=display:flex><span>    <span style=color:#75715e>// ...
+</span></span></span><span style=display:flex><span>    <span style=color:#66d9ef>fn</span> <span style=color:#a6e22e>as_utf8_pattern</span>(<span style=color:#f92672>&amp;</span>self) -&gt; Option<span style=color:#f92672>&lt;</span>Utf8Pattern<span style=color:#f92672>&lt;</span>&#39;_<span style=color:#f92672>&gt;&gt;</span> {
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>static</span> <span style=color:#66d9ef>NEEDLE</span>: [<span style=color:#66d9ef>u8</span>; <span style=color:#ae81ff>1</span>] <span style=color:#f92672>=</span> [<span style=color:#ae81ff>0x80</span>];
+</span></span><span style=display:flex><span>        Some(Utf8Pattern::StringPattern(<span style=color:#f92672>&amp;</span><span style=color:#66d9ef>NEEDLE</span>))
+</span></span><span style=display:flex><span>    }
+</span></span><span style=display:flex><span>}
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span><span style=color:#75715e>// &#34;\u{d000}&#34; is [ed, 80, 80]; the result is [ed, 3f, 3f], which is not UTF-8.
+</span></span></span><span style=display:flex><span><span style=color:#66d9ef>let</span> corrupted <span style=color:#f92672>=</span> <span style=color:#e6db74>&#34;</span><span style=color:#ae81ff>\u{d000}</span><span style=color:#e6db74>&#34;</span>.replace(NonAsciiBytePattern, <span style=color:#e6db74>&#34;?&#34;</span>);
+</span></span></code></pre></div><p><code>str::replace</code> rewrites the continuation bytes and returns a <code>String</code> that isn&rsquo;t
+valid UTF-8, and later string operations that rely on UTF-8 reach undefined
+behavior. The
+<a href=https://github.com/rust-lang/rust/pull/156556>fix</a> changed <code>StringPattern</code> to
+hold <code>&amp;str</code> instead of <code>&[u8]</code>, so the type itself now guarantees UTF-8. In Rust
+1.97.0,
+<a href=https://github.com/rust-lang/rust/blob/1.97.0/library/core/src/str/pattern.rs#L173-L180><code>library/core/src/str/pattern.rs</code></a>
+reads:</p><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><code class=language-rust data-lang=rust><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">173</span><span><span style=color:#66d9ef>pub</span> <span style=color:#66d9ef>enum</span> <span style=color:#a6e22e>Utf8Pattern</span><span style=color:#f92672>&lt;</span><span style=color:#a6e22e>&#39;a</span><span style=color:#f92672>&gt;</span> {
+</span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">174</span><span>    <span style=color:#e6db74>/// Type returned by String and str types.
+</span></span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">175</span><span>    <span style=color:#e6db74>/// This stores `str` rather than bytes so callers cannot describe
+</span></span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">176</span><span>    <span style=color:#e6db74>/// non-UTF-8 string patterns through this API.
+</span></span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">177</span><span>    StringPattern(<span style=color:#f92672>&amp;</span><span style=color:#a6e22e>&#39;a</span> <span style=color:#66d9ef>str</span>),
+</span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">178</span><span>    <span style=color:#e6db74>/// Type returned by char types.
+</span></span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">179</span><span>    CharPattern(<span style=color:#66d9ef>char</span>),
+</span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">180</span><span>}
+</span></span></code></pre></div><p>When unsafe code depends on a property of a user-provided implementation, don&rsquo;t
+take it on faith. Call the implementation once and keep the result, validate
+what it returns, or encode the property in a type that safe code can&rsquo;t forge, as
+this fix did. If none of those work, make the trait <code>unsafe</code> so implementors
+explicitly promise to uphold it.</p><h4 id=more-examples>More examples</h4><p><code>join</code> shows how easy it is to fix this kind of bug only partway. In 2020, we
+reported that it trusted <code>Borrow::borrow</code> to return the same string on each call
+(<a href=https://rustsec.org/advisories/CVE-2020-36323.html>CVE-2020-36323</a>), and the
+fix handled strings that shrink between calls. In April 2026, the same function
+<a href=https://github.com/rust-lang/rust/pull/155708>needed another fix</a>: <code>join</code>
+borrows the first element twice, and if it grows on the second call, the
+remaining-length calculation underflows into a heap overflow. The earlier fix
+had never covered that path.</p><p>The <code>Pattern</code> API has been questioned before. In 2019, a report that
+<code>trim_start_matches</code> trusted a searcher&rsquo;s indices was closed because <code>Searcher</code>
+is an <code>unsafe</code> trait: its implementations promise to return valid indices
+(<a href=https://github.com/rust-lang/rust/issues/62773>#62773</a>). This year showed
+that promise isn&rsquo;t enough on its own. In June, a safe <code>Pattern</code> was found to
+hand back a perfectly valid searcher built for a different string, and consumers
+such as <code>strip_prefix_of</code> applied its ranges to the original string unchecked,
+reading out of bounds
+(<a href=https://github.com/rust-lang/rust/issues/158265>#158265</a>). In October, a
+report pointed out that the contract of the <code>Searcher</code> trait doesn&rsquo;t spell out
+what <code>str::split</code> relies on
+(<a href=https://github.com/rust-lang/rust/issues/164904>#164904</a>), and auditing the
+code around it turned up the same wrong-string problem in <code>split_once</code>
+(<a href=https://github.com/rust-lang/rust/issues/165076>#165076</a>). Both soundness
+bugs are still open. And during the
+<code>Allocator</code> stabilization, <code>Arc</code> turned out to trust that a cloned allocator can
+free the original&rsquo;s memory, even though anyone can write a safe <code>Clone</code>
+implementation that breaks that
+(<a href=https://github.com/rust-lang/rust/issues/156920>#156920</a>). The requirement
+was moved into a separate <code>unsafe</code> marker trait.</p><h3 id=pattern-3-trusting-the-underlying-system>Pattern 3: Trusting the underlying system</h3><p>The first two patterns stay inside Rust code. The third sits at the boundary
+with the operating system, where unsafe code trusts process-wide state such as
+signal stacks, memory mappings, and the environment, which other threads, C
+libraries, or the kernel can touch at any time. These bugs have been hard to
+find automatically, because a static analyzer would need to model all of that
+surrounding behavior. AI agents change the picture: they understand enough about
+the environment the code runs in to make this area practical to search. We
+started exploring it and found some interesting bugs.</p><h4 id=processexit-and-the-main-threads-signal-stack><code>process::exit</code> and the main thread&rsquo;s signal stack</h4><p>When a thread overflows its stack, Rust prints a clear message and aborts
+instead of crashing with a bare segmentation fault:</p><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><code class=language-text data-lang=text><span style=display:flex><span>thread &#39;main&#39; (3307186) has overflowed its stack
+</span></span><span style=display:flex><span>fatal runtime error: stack overflow, aborting
+</span></span></code></pre></div><p>This relies on a few pieces of process-wide state. Each thread&rsquo;s stack ends in a
+guard page, an inaccessible region just past the stack&rsquo;s limit: <code>pthread</code>
+reserves one for every spawned thread, and on Linux the kernel&rsquo;s own stack guard
+plays that role for the main thread. Touching it raises <code>SIGSEGV</code>, and Rust
+registers a handler for that signal. The handler can&rsquo;t run on the stack that just
+overflowed, so Rust also gives each thread an alternate signal stack, a small
+separate mapping with a guard page of its own, which the kernel switches to when
+it delivers the signal. The handler checks that the faulting address is inside
+the guard page, prints the message, and aborts.</p><p><img src=stack-overflow.svg alt="Diagram: one column of memory. The main thread&rsquo;s stack frames grow down until the next frame lands in the guard page below, which has no access. That access raises SIGSEGV, which invokes Rust&rsquo;s registered signal handler. The handler runs on the alternate signal stack, a separate read/write mapping further down with its own guard page. In the bug, process::exit in a child thread unmaps that alternate stack while it is still registered."></p><p><a href=https://github.com/rust-lang/rust/issues/161018>We found</a> that calling
+<code>process::exit</code> from a child thread tears down the main thread&rsquo;s alternate stack
+while the main thread is still running. <code>process::exit</code> runs the runtime&rsquo;s
+cleanup before calling libc&rsquo;s <code>exit</code>, and in Rust 1.98.0 that cleanup ends in
+<a href=https://github.com/rust-lang/rust/blob/1.98.0/library/std/src/sys/pal/unix/stack_overflow.rs#L196-L203><code>library/std/src/sys/pal/unix/stack_overflow.rs</code></a>:</p><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><code class=language-rust data-lang=rust><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">196</span><span><span style=color:#66d9ef>pub</span> <span style=color:#66d9ef>unsafe</span> <span style=color:#66d9ef>fn</span> <span style=color:#a6e22e>cleanup</span>() {
+</span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">197</span><span>    <span style=color:#66d9ef>if</span> <span style=color:#a6e22e>cfg!</span>(panic <span style=color:#f92672>=</span> <span style=color:#e6db74>&#34;immediate-abort&#34;</span>) {
+</span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">198</span><span>        <span style=color:#66d9ef>return</span>;
+</span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">199</span><span>    }
+</span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">200</span><span>    <span style=color:#75715e>// FIXME: I probably cause more bugs than I&#39;m worth!
+</span></span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">201</span><span>    <span style=color:#75715e>// see https://github.com/rust-lang/rust/issues/111272
+</span></span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">202</span><span>    <span style=color:#66d9ef>unsafe</span> { drop_handler(<span style=color:#66d9ef>MAIN_ALTSTACK</span>.load(Ordering::Relaxed)) };
+</span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">203</span><span>}
+</span></span></code></pre></div><p>Line 202 passes <code>MAIN_ALTSTACK</code>, the main thread&rsquo;s alternate stack, to
+<a href=https://github.com/rust-lang/rust/blob/1.98.0/library/std/src/sys/pal/unix/stack_overflow.rs#L297-L301><code>drop_handler</code></a>:</p><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><code class=language-rust data-lang=rust><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">297</span><span><span style=color:#75715e>// SAFETY: we warned the caller this disables the alternate signal stack!
+</span></span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">298</span><span><span style=color:#66d9ef>unsafe</span> { sigaltstack(<span style=color:#f92672>&amp;</span>disabling_stack, ptr::null_mut()) };
+</span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">299</span><span><span style=color:#75715e>// SAFETY: We know from `get_stackp` that the alternate stack we installed is part of
+</span></span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">300</span><span><span style=color:#75715e>// a mapping that started one page earlier, so walk back a page and unmap from there.
+</span></span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">301</span><span><span style=color:#66d9ef>unsafe</span> { munmap(data.sub(page_size), sigstack_size <span style=color:#f92672>+</span> page_size) };
+</span></span></code></pre></div><p>Line 298 disables the alternate stack of the calling thread, but line 301 unmaps
+the main thread&rsquo;s. The code assumes it runs on the main thread, which isn&rsquo;t true
+when a child thread calls <code>process::exit</code>. The main thread keeps running until
+libc&rsquo;s <code>exit</code> finishes, with its signal stack registration still pointing at
+unmapped memory. If it overflows its stack in that window, the kernel can&rsquo;t
+deliver the signal, and our proof of concept dies with a plain segmentation
+fault instead of Rust&rsquo;s message. The bug dates back to
+<a href=https://github.com/rust-lang/rust/pull/28069>2015</a>, and the
+<a href=https://github.com/rust-lang/rust/pull/161037>fix</a> stops cleaning up the main
+thread&rsquo;s alternate stack altogether.</p><p>We also checked whether this could become a security issue. In theory, it could
+lead to code execution: if a writable mapping landed at the old alternate
+stack&rsquo;s address, the kernel would deliver the main thread&rsquo;s next signal onto it,
+and another thread could overwrite the handler&rsquo;s frame, such as its return
+address, while it runs. In practice, the conditions are very tight. Everything
+has to happen in the brief window before libc&rsquo;s <code>exit</code> finishes, the new mapping
+must have exactly the right size to reuse that address, and overwriting the
+frame takes a second race inside a short handler. We found no reliable way to
+get a writable mapping of that size, so we judged it unlikely to be exploitable.
+The <a href=https://github.com/rust-lang/rust/issues/161018>issue</a> has more details in
+its security impact analysis.</p><h4 id=commandextexec-and-the-global-environment><code>CommandExt::exec</code> and the global environment</h4><p><a href=https://github.com/rust-lang/rust/issues/156951>Our other report</a> involves the
+process environment. On Unix, <code>CommandExt::exec</code> replaces the current process
+with a new program. When the command has its own environment variables, <code>exec</code>
+points the process-global <code>environ</code> at a new array, calls <code>execvp</code>, and restores
+<code>environ</code> if <code>execvp</code> fails. In Rust 1.99.0, <code>Command::exec</code> takes the
+environment lock in
+<a href=https://github.com/rust-lang/rust/blob/1.99.0/library/std/src/sys/process/unix/unix.rs#L242-L244><code>library/std/src/sys/process/unix/unix.rs</code></a>:</p><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><code class=language-rust data-lang=rust><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">242</span><span><span style=color:#66d9ef>let</span> _lock <span style=color:#f92672>=</span> sys::env::env_read_lock();
+</span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">243</span><span>
+</span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">244</span><span><span style=color:#66d9ef>let</span> Err(e) <span style=color:#f92672>=</span> self.do_exec(theirs, envp.as_ref());
+</span></span></code></pre></div><p><a href=https://github.com/rust-lang/rust/blob/1.99.0/library/std/src/sys/process/unix/unix.rs#L409-L414><code>Command::do_exec</code></a>,
+in the same file, then swaps the environment:</p><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><code class=language-rust data-lang=rust><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">409</span><span>    _reset <span style=color:#f92672>=</span> Some(Reset(<span style=color:#f92672>*</span>sys::env::environ()));
+</span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">410</span><span>    <span style=color:#f92672>*</span>sys::env::environ() <span style=color:#f92672>=</span> envp.as_ptr();
+</span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">411</span><span>}
+</span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">412</span><span>
+</span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">413</span><span>libc::execvp(self.get_program_cstr().as_ptr(), self.get_argv().as_ptr());
+</span></span><span style=display:flex><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">414</span><span>Err(io::Error::last_os_error())
+</span></span></code></pre></div><p>Line 242 takes only the read side of the environment lock, yet line 410 writes
+the process-global <code>environ</code>; line 409 saves the old value so it can be restored
+if <code>execvp</code> on line 413 fails. Writing <code>environ</code> under a read lock lets other
+threads in. A thread calling <code>env::var</code> takes the same read lock and can see
+variables meant only for the new program, and two failed <code>exec</code> calls racing
+each other can leave <code>environ</code> pointing at a freed array that a later
+<code>env::vars_os()</code> reads. Both proofs of concept use only safe Rust. A
+<a href=https://github.com/rust-lang/rust/pull/55939>2018 fix</a> held an exclusive lock
+here, but when the environment lock became a
+<a href=https://github.com/rust-lang/rust/pull/81850>read-write lock</a> in 2021, <code>exec</code>
+kept the read side. A fix that avoids touching <code>environ</code> by calling <code>execve</code>
+directly is <a href=https://github.com/rust-lang/rust/pull/157144>in review</a>.</p><h4 id=envset_var><code>env::set_var</code></h4><p>The environment has caused trouble before. <code>env::set_var</code> was safe to call from
+Rust 1.0 until the 2024 edition, but on most Unix platforms the C library&rsquo;s
+environment isn&rsquo;t thread-safe, and many C functions read it without going
+through Rust&rsquo;s lock, including some that the standard library itself calls for
+DNS lookups. After a discussion that
+<a href=https://github.com/rust-lang/rust/issues/27970>began in 2015</a>, the 2024
+edition
+<a href=https://doc.rust-lang.org/edition-guide/rust-2024/newly-unsafe-functions.html>marked <code>set_var</code> and <code>remove_var</code> as <code>unsafe</code></a>.
+As <a href=https://doc.rust-lang.org/std/env/fn.set_var.html>their documentation</a> now
+puts it, the only sound option in a multi-threaded program is not to call them
+at all.</p><h4 id=processexit-and-thread-local-destructors><code>process::exit</code> and thread-local destructors</h4><p>Getting this boundary right is hard, and more problems are still open. While
+exploring this area, we independently ran into a double free in safe code that
+<code>process::exit</code> can cause through thread-local destructors. It was reported by
+someone else (<a href=https://github.com/rust-lang/rust/issues/164243>#164243</a>), but
+it&rsquo;s worth mentioning here. libc&rsquo;s <code>exit</code> first runs the calling thread&rsquo;s
+thread-local destructors, as C++ requires, and Rust registers its destructors
+the same way. If a destructor calls <code>process::exit</code> while a thread local is
+being replaced, libc drops that thread local a second time. A
+<a href=https://github.com/rust-lang/rust/pull/165125>proposed fix</a> switches
+<code>process::exit</code> to POSIX <code>_exit</code>, which ends the process without running these
+handlers.</p><h3 id=limitations-before-we-continue>Limitations, before we continue</h3><p>Our focus was the Rust standard library: unsafe code behind its APIs that safe
+code can misuse. Bugs in the compiler itself, such as miscompilations and holes
+in the type system, were out of scope, though there are plenty of them.</p><h2 id=why-rust-still-matters>Why Rust still matters</h2><p>These bugs may look alarming, but most Rust users don&rsquo;t need to worry about
+them. Each pattern needs an unusual setup to trigger: a panic that unwinds at
+exactly the wrong point, a deliberately misbehaving implementation, or an
+unusual interaction with the operating system, such as calling <code>process::exit</code>
+from a child thread or racing two failed <code>exec</code> calls. Ordinary Rust code is
+unlikely to do any of these, and most of the bugs have already been fixed.</p><p>It also helps to distinguish a vulnerability in a library from one in an
+application. Every bug in this post is a soundness bug in the standard library:
+some safe code could trigger undefined behavior through its API. That becomes a
+serious application vulnerability only if a real program reaches the API in
+that unusual way.</p><p>Some people argue that Rust&rsquo;s memory safety doesn&rsquo;t matter if it isn&rsquo;t perfect.
+We think that misses what the safety model gives us: a precise vocabulary for
+what even counts as a safety bug. Rust&rsquo;s rule is that safe code must never cause
+undefined behavior, so when it does, some unsafe code broke its contract, and
+that code has to change.</p><p>Many of the bugs in this post wouldn&rsquo;t be considered bugs in other languages. A
+comparator that breaks <code>std::sort</code> is the caller&rsquo;s fault in C++, and a race
+between <code>setenv</code> and <code>getenv</code> in C is arguably nobody&rsquo;s fault. Rust gives us the
+language to say whose fault it is and what needs to be fixed: <code>join</code> has to
+stay sound against a misbehaving <code>Borrow</code>, and <code>set_var</code> became <code>unsafe</code> so
+callers explicitly take on the responsibility. Because the library owns that
+responsibility, we can fix and prevent these bugs once, at the library level,
+instead of hoping every application avoids them. That&rsquo;s what turns each of these
+reports into a concrete fix rather than a shrug.</p><h2 id=takeaways>Takeaways</h2><p>If you write unsafe Rust, the three patterns make a short checklist. For every
+call inside an unsafe region, ask:</p><ul><li>Can it panic while an invariant is broken?</li><li>Does it run code your caller supplied?</li><li>Does it touch state that another thread, a C library, or the kernel can change
+underneath you?</li></ul><p>Knowing what you trust, and why, is most of the work.</p></div></article></main><footer class=site-footer><span>FORGE Lab <span aria-hidden=true>·</span> Microsoft Security</span><div><a href=https://github.com/microsoft/forge-lab/blob/main/LICENSE>CC BY 4.0</a>
+<a href=/index.xml>RSS</a></div></footer></div></body></html>
